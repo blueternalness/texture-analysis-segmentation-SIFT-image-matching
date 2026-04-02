@@ -5,17 +5,14 @@
 #include <numeric>
 #include <map>
 #include <opencv2/opencv.hpp>
-#include <opencv2/ml.hpp> // Required for SVM
+#include <opencv2/ml.hpp>
 
 using namespace std;
 using namespace cv;
 
-// --- Helper Functions from Previous Steps ---
-
 Mat readRawImage(const string& filename, int width = 128, int height = 128) {
     Mat image(height, width, CV_8UC1);
     ifstream file(filename, ios::binary);
-    if (!file.is_open()) return Mat();
     file.read(reinterpret_cast<char*>(image.data), width * height);
     return image;
 }
@@ -26,7 +23,6 @@ vector<Mat> generateLawsFilters() {
     Mat S5 = (Mat_<float>(5, 1) << -1, 0, 2, 0, -1);
     Mat W5 = (Mat_<float>(5, 1) << -1, 2, 0, -2, 1);
     Mat R5 = (Mat_<float>(5, 1) << 1, -4, 6, -4, 1);
-
     vector<Mat> kernels1D = {L5, E5, S5, W5, R5};
     vector<Mat> filters25;
 
@@ -51,20 +47,11 @@ vector<float> extractFeatures(const Mat& image, const vector<Mat>& filters) {
     }
     return featureVector;
 }
-
-// --- NEW Helper Functions for Part B ---
-
-// Unsupervised: K-Means Purity Error Calculation
 float evaluateKMeans(const Mat& testFeatures, const vector<int>& testLabels, int K) {
     Mat bestLabels;
     TermCriteria criteria(TermCriteria::EPS + TermCriteria::MAX_ITER, 100, 1.0);
-    
-    // Run K-means
     kmeans(testFeatures, K, bestLabels, criteria, 10, KMEANS_PP_CENTERS);
-
     int errors = 0;
-    
-    // For each cluster, find the majority true class to evaluate purity
     for (int k = 0; k < K; ++k) {
         map<int, int> classCounts;
         vector<int> pointsInCluster;
@@ -76,7 +63,6 @@ float evaluateKMeans(const Mat& testFeatures, const vector<int>& testLabels, int
             }
         }
         
-        // Find majority class in this cluster
         int majorityClass = -1;
         int maxCount = -1;
         for (auto const& [cls, count] : classCounts) {
@@ -85,8 +71,6 @@ float evaluateKMeans(const Mat& testFeatures, const vector<int>& testLabels, int
                 majorityClass = cls;
             }
         }
-        
-        // Any point in this cluster that is NOT the majority class is an error
         for (int idx : pointsInCluster) {
             if (testLabels[idx] != majorityClass) {
                 errors++;
@@ -97,21 +81,14 @@ float evaluateKMeans(const Mat& testFeatures, const vector<int>& testLabels, int
     return (float)errors / testLabels.size() * 100.0f;
 }
 
-// Supervised: SVM Error Calculation
 float evaluateSVM(const Mat& trainFeat, const vector<int>& trainLbls, const Mat& testFeat, const vector<int>& testLbls) {
-    // Convert integer labels vector to Mat (Required by OpenCV SVM)
     Mat trainLabelsMat(trainLbls.size(), 1, CV_32SC1, (void*)trainLbls.data());
-    
-    // Setup SVM
     Ptr<ml::SVM> svm = ml::SVM::create();
     svm->setType(ml::SVM::C_SVC);
-    svm->setKernel(ml::SVM::LINEAR); // Linear kernel is standard for this dimensionality
+    svm->setKernel(ml::SVM::LINEAR);
     svm->setTermCriteria(TermCriteria(TermCriteria::MAX_ITER, 1000, 1e-6));
-    
-    // Train
     svm->train(trainFeat, ml::ROW_SAMPLE, trainLabelsMat);
     
-    // Predict
     int errors = 0;
     for (int i = 0; i < testFeat.rows; ++i) {
         float pred = svm->predict(testFeat.row(i));
@@ -119,7 +96,6 @@ float evaluateSVM(const Mat& trainFeat, const vector<int>& trainLbls, const Mat&
             errors++;
         }
     }
-    
     return (float)errors / testLbls.size() * 100.0f;
 }
 
@@ -128,7 +104,6 @@ int main() {
     vector<string> classNames = {"blanket", "brick", "grass", "stones"};
     string trainDir = "train/";
     string testDir = "test/";
-
     vector<string> trainFiles;
     vector<int> trainLabels;
     
@@ -165,60 +140,38 @@ int main() {
             index++;
         }
     }
-
-    // --- Feature Extraction ---
     vector<Mat> filters = generateLawsFilters();
     Mat trainFeat25D(trainFiles.size(), 25, CV_32F);
     Mat testFeat25D(testFiles.size(), 25, CV_32F);
 
-    cout << "Loading Data & Extracting Features..." << endl;
     for (size_t i = 0; i < trainFiles.size(); i++) {
         Mat img = readRawImage(trainFiles[i]);
-        if(img.empty()) { cerr << "Error loading: " << trainFiles[i] << endl; return -1; }
         vector<float> feats = extractFeatures(img, filters);
-        for(int j=0; j<25; j++) trainFeat25D.at<float>(i, j) = feats[j];
+        for(int j=0; j<25; j++){
+            trainFeat25D.at<float>(i, j) = feats[j];
+        }
     }
     for (size_t i = 0; i < testFiles.size(); i++) {
         Mat img = readRawImage(testFiles[i]);
-        if(img.empty()) { cerr << "Error loading: " << testFiles[i] << endl; return -1; }
         vector<float> feats = extractFeatures(img, filters);
-        for(int j=0; j<25; j++) testFeat25D.at<float>(i, j) = feats[j];
+        for(int j=0; j<25; j++){
+            testFeat25D.at<float>(i, j) = feats[j];
+        }
     }
-
-    // --- PCA Reduction (25D -> 3D) ---
     PCA pca(trainFeat25D, Mat(), PCA::DATA_AS_ROW, 3);
     Mat trainFeat3D = pca.project(trainFeat25D);
     Mat testFeat3D = pca.project(testFeat25D);
 
-
-    // =========================================================================
-    // PART B: ADVANCED TEXTURE CLASSIFICATION
-    // =========================================================================
-    
-    cout << "\n=======================================" << endl;
-    cout << " Part B: Advanced Texture Classification" << endl;
-    cout << "=======================================\n" << endl;
-
-    // 1. Unsupervised: K-means Clustering
-    cout << "--- 1. Unsupervised Learning (K-Means) ---" << endl;
-    int K = 4; // Number of texture classes
-    
+    int K = 4;
     float kmeansError25D = evaluateKMeans(testFeat25D, testLabels, K);
     float kmeansError3D = evaluateKMeans(testFeat3D, testLabels, K);
     
-    cout << "K-Means Error Rate (25-D Features) : " << kmeansError25D << "%" << endl;
-    cout << "K-Means Error Rate (3-D Features)  : " << kmeansError3D << "%" << endl;
-
-
-    // 2. Supervised: Support Vector Machine (SVM)
-    cout << "\n--- 2. Supervised Learning (SVM) ---" << endl;
+    cout << "K-Means Error(25-D): " << kmeansError25D << "%" << endl;
+    cout << "K-Means Error(3-D): " << kmeansError3D << "%" << endl;
     
     float svmError25D = evaluateSVM(trainFeat25D, trainLabels, testFeat25D, testLabels);
     float svmError3D = evaluateSVM(trainFeat3D, trainLabels, testFeat3D, testLabels);
-    
-    cout << "SVM Error Rate (25-D Features)     : " << svmError25D << "%" << endl;
-    cout << "SVM Error Rate (3-D Features)      : " << svmError3D << "%" << endl;
-
-    cout << "\nProcessing Complete." << endl;
+    cout << "SVM Error (25-D): " << svmError25D << "%" << endl;
+    cout << "SVM Error (3-D): " << svmError3D << "%" << endl;
     return 0;
 }
