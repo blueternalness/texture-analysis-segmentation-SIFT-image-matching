@@ -25,6 +25,48 @@ Mat readRawRGB(const string& filename, int width = 600, int height = 400) {
     return img;
 }
 
+// -------------------------------------------------------------------------
+// THE MANUAL BAG-OF-WORDS ENGINE
+// -------------------------------------------------------------------------
+// This function takes a single image's descriptors and maps them to the 
+// nearest visual word in our K-Means vocabulary to create a histogram.
+Mat computeManualBoW(const Mat& image_descriptors, const Mat& vocabulary, int k) {
+    // Initialize an empty 1-row, k-column matrix (all zeros) for the histogram
+    Mat histogram = Mat::zeros(1, k, CV_32F);
+
+    if (image_descriptors.empty()) return histogram;
+
+    // 1. For every single SIFT descriptor in this specific image...
+    for (int i = 0; i < image_descriptors.rows; i++) {
+        Mat single_descriptor = image_descriptors.row(i);
+        single_descriptor.convertTo(single_descriptor, CV_32F); // Ensure float32
+
+        // 2. Find the nearest "word" (cluster center) in the vocabulary
+        int best_word_idx = -1;
+        float min_distance = FLT_MAX;
+
+        for (int j = 0; j < vocabulary.rows; j++) {
+            Mat word = vocabulary.row(j);
+            // Calculate Euclidean (L2) distance between the descriptor and the word
+            float dist = norm(single_descriptor, word, NORM_L2);
+
+            if (dist < min_distance) {
+                min_distance = dist;
+                best_word_idx = j;
+            }
+        }
+
+        // 3. Add a tally to the winning word's bin
+        histogram.at<float>(0, best_word_idx) += 1.0f;
+    }
+
+    // 4. L1 Normalization (convert raw counts to percentages)
+    // This allows us to compare images that have different numbers of keypoints.
+    histogram /= (float)image_descriptors.rows;
+
+    return histogram;
+}
+
 // Helper to print the 8-bin histogram nicely
 void printHistogram(const string& name, const Mat& hist) {
     cout << name << " BoW Histogram (8 bins): [ ";
@@ -43,7 +85,7 @@ int main() {
     Mat cat3 = readRawRGB("Cat_3.raw", w, h);
     Mat dog1 = readRawRGB("Dog_1.raw", w, h);
 
-    // 2. Initialize SIFT Extractor
+    // 2. Initialize Base SIFT Extractor
     Ptr<SIFT> sift = SIFT::create();
 
     vector<KeyPoint> kp_c1, kp_c2, kp_c3, kp_d1;
@@ -61,31 +103,27 @@ int main() {
     all_descriptors.push_back(desc_c3);
     all_descriptors.push_back(desc_d1);
 
-    cout << "Total SIFT descriptors extracted: " << all_descriptors.rows << endl;
+    // Standardize matrix type for K-Means (requires CV_32F)
+    Mat all_desc_32f;
+    all_descriptors.convertTo(all_desc_32f, CV_32F);
 
-    // 4. Run K-Means Clustering to create the Codebook (k=8)
-    int dictionarySize = 8;
+    cout << "Total SIFT descriptors extracted: " << all_desc_32f.rows << endl;
+
+    // 4. Run Standard K-Means Clustering
+    int k = 8;
+    Mat labels, vocabulary;
     TermCriteria tc(TermCriteria::MAX_ITER + TermCriteria::EPS, 100, 0.001);
-    int retries = 1;
-    int flags = KMEANS_PP_CENTERS;
+    int attempts = 3; 
+    int flags = KMEANS_PP_CENTERS; 
     
-    cout << "Clustering SIFT features into " << dictionarySize << " visual words..." << endl;
-    BOWKMeansTrainer bowTrainer(dictionarySize, tc, retries, flags);
-    bowTrainer.add(all_descriptors);
-    Mat vocabulary = bowTrainer.cluster();
+    cout << "Clustering SIFT features into " << k << " visual words using cv::kmeans..." << endl;
+    kmeans(all_desc_32f, k, labels, tc, attempts, flags, vocabulary);
 
-    // 5. Initialize the Bag of Words Descriptor Extractor
-    // FlannBasedMatcher is efficient for floating-point SIFT descriptors
-    Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create(DescriptorMatcher::FLANNBASED);
-    BOWImgDescriptorExtractor bowDE(sift, matcher);
-    bowDE.setVocabulary(vocabulary);
-
-    // 6. Compute BoW Histograms for each image
-    Mat bow_cat1, bow_cat2, bow_cat3, bow_dog1;
-    bowDE.compute(cat1, kp_c1, bow_cat1);
-    bowDE.compute(cat2, kp_c2, bow_cat2);
-    bowDE.compute(cat3, kp_c3, bow_cat3);
-    bowDE.compute(dog1, kp_d1, bow_dog1);
+    // 5. Compute Histograms Manually
+    Mat bow_cat1 = computeManualBoW(desc_c1, vocabulary, k);
+    Mat bow_cat2 = computeManualBoW(desc_c2, vocabulary, k);
+    Mat bow_cat3 = computeManualBoW(desc_c3, vocabulary, k);
+    Mat bow_dog1 = computeManualBoW(desc_d1, vocabulary, k);
 
     cout << "\n--- Bag of Words Histograms ---" << endl;
     printHistogram("Cat_1", bow_cat1);
@@ -93,16 +131,15 @@ int main() {
     printHistogram("Cat_3", bow_cat3);
     printHistogram("Dog_1", bow_dog1);
 
-    // 7. Match Cat_3's codewords with the others using L2 Distance
-    // Lower distance = higher similarity
+    // 6. Match Cat_3's codewords with the others using L2 Distance
     double dist_c3_c1 = norm(bow_cat3, bow_cat1, NORM_L2);
     double dist_c3_c2 = norm(bow_cat3, bow_cat2, NORM_L2);
     double dist_c3_d1 = norm(bow_cat3, bow_dog1, NORM_L2);
 
     cout << "\n--- Matching Results (L2 Distance relative to Cat_3) ---" << endl;
-    cout << "Cat_3 vs Cat_1: " << dist_c3_c1 << endl;
-    cout << "Cat_3 vs Cat_2: " << dist_c3_c2 << endl;
-    cout << "Cat_3 vs Dog_1: " << dist_c3_d1 << endl;
+    cout << "Cat_3 vs Cat_1: " << fixed << setprecision(4) << dist_c3_c1 << endl;
+    cout << "Cat_3 vs Cat_2: " << fixed << setprecision(4) << dist_c3_c2 << endl;
+    cout << "Cat_3 vs Dog_1: " << fixed << setprecision(4) << dist_c3_d1 << endl;
     
     cout << "\nNote: Lower distance indicates a closer match in the Bag-of-Words space." << endl;
 
