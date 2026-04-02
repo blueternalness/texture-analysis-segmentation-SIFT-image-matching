@@ -1,0 +1,1 @@
+g++ -std=c++17 bag-of-words.cpp -o bag-of-words `pkg-config --cflags --libs opencv4`
