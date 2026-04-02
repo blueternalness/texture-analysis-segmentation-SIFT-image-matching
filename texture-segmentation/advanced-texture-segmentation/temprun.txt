@@ -1,1 +1,1 @@
-g++ -std=c++17 advanced-texture-segmentation.cpp -o advanced-texture-segmentation
+g++ -std=c++17 advanced-texture-segmentation.cpp -o advanced-texture-segmentation `pkg-config --cflags --libs opencv4`
