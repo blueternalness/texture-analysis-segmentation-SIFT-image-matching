@@ -1,0 +1,1 @@
+g++ -std=c++17 basic-texture-segmentation.cpp -o basic-texture-segmentation
