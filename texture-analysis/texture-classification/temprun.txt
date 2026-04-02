@@ -1,1 +1,0 @@
-g++ -std=c++17 texture-classification.cpp -o texture-classification `pkg-config --cflags --libs opencv4`
